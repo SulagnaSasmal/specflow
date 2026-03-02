@@ -1,0 +1,506 @@
+openapi: "3.1.0"
+info:
+  title: VaultPay API
+  version: "2.1.0"
+  description: |
+    VaultPay is a secure payments infrastructure API for financial institutions and FinTech companies.
+    Process payments, manage accounts, and monitor transactions with enterprise-grade compliance built in.
+  contact:
+    name: VaultPay Developer Support
+    email: api@vaultpay.io
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: https://api.vaultpay.io/v2
+    description: Production
+  - url: https://sandbox.vaultpay.io/v2
+    description: Sandbox
+
+tags:
+  - name: Payments
+    description: Initiate, authorize, and manage payment transactions
+  - name: Accounts
+    description: Account management and balance operations
+  - name: Transfers
+    description: Fund transfers between accounts
+  - name: Webhooks
+    description: Webhook configuration and event management
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (e.g., cents for USD)
+          example: 10000
+        currency:
+          type: string
+          format: iso-4217
+          description: ISO 4217 currency code
+          example: USD
+          enum: [USD, EUR, GBP, JPY, CAD, AUD]
+
+    PaymentStatus:
+      type: string
+      enum: [pending, authorized, captured, settled, failed, refunded, cancelled]
+      description: Current state of a payment transaction
+
+    Payment:
+      type: object
+      required: [id, amount, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique payment identifier
+          example: pay_550e8400-e29b-41d4-a716-446655440000
+        amount:
+          $ref: "#/components/schemas/Money"
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        description:
+          type: string
+          description: Human-readable payment description
+          example: Subscription renewal - Pro plan
+        customer_id:
+          type: string
+          description: ID of the customer initiating the payment
+          example: cus_abc123
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Arbitrary key-value metadata
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-06-01T10:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2024-06-01T10:31:00Z"
+
+    PaymentRequest:
+      type: object
+      required: [amount, payment_method]
+      properties:
+        amount:
+          $ref: "#/components/schemas/Money"
+        payment_method:
+          type: object
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [card, bank_transfer, wallet]
+            token:
+              type: string
+              description: Tokenized payment method ID
+        description:
+          type: string
+          maxLength: 500
+        customer_id:
+          type: string
+        idempotency_key:
+          type: string
+          format: uuid
+          description: Unique key to prevent duplicate charges
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Account:
+      type: object
+      required: [id, name, balance, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: acc_abc123
+        name:
+          type: string
+          example: Primary Business Account
+        balance:
+          $ref: "#/components/schemas/Money"
+        available_balance:
+          $ref: "#/components/schemas/Money"
+        status:
+          type: string
+          enum: [active, suspended, closed]
+        created_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: invalid_payment_method
+        message:
+          type: string
+          example: The provided payment method token is invalid or expired
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        request_id:
+          type: string
+          format: uuid
+
+security:
+  - BearerAuth: []
+
+paths:
+  /payments:
+    get:
+      operationId: listPayments
+      tags: [Payments]
+      summary: List payments
+      description: Returns a paginated list of payments. Results are sorted by creation date, descending.
+      x-compliance:
+        regulations: [PCI-DSS-4.0, SOX]
+        data-classification: restricted
+        audit-required: true
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of payments to return (1–100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          description: Pagination cursor from previous response
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by payment status
+          schema:
+            $ref: "#/components/schemas/PaymentStatus"
+        - name: from
+          in: query
+          description: Return payments created after this timestamp (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Return payments created before this timestamp (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated list of payments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Payment"
+                  has_more:
+                    type: boolean
+                  next_cursor:
+                    type: string
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      operationId: initiatePayment
+      tags: [Payments]
+      summary: Initiate a payment
+      description: |
+        Creates and authorizes a new payment. For card payments, this performs a real-time
+        authorization check. The payment is placed in `authorized` status and requires capture within 7 days.
+      x-compliance:
+        regulations: [PCI-DSS-4.0, PSD2-SCA, BSA-AML]
+        data-classification: restricted
+        audit-required: true
+        retention-days: 2555
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentRequest"
+            example:
+              amount:
+                amount: 10000
+                currency: USD
+              payment_method:
+                type: card
+                token: tok_visa_4242
+              description: Subscription renewal - Pro plan
+              idempotency_key: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        "201":
+          description: Payment created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "402":
+          description: Payment declined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /payments/{payment_id}:
+    get:
+      operationId: getPayment
+      tags: [Payments]
+      summary: Get a payment
+      description: Retrieves full details of a specific payment by ID.
+      x-compliance:
+        regulations: [PCI-DSS-4.0]
+        data-classification: restricted
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          description: Unique payment identifier
+          schema:
+            type: string
+            example: pay_550e8400-e29b-41d4-a716-446655440000
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "404":
+          description: Payment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /payments/{payment_id}/capture:
+    post:
+      operationId: capturePayment
+      tags: [Payments]
+      summary: Capture a payment
+      description: Captures a previously authorized payment. Must be called within 7 days of authorization.
+      x-compliance:
+        regulations: [PCI-DSS-4.0, PSD2-SCA]
+        data-classification: restricted
+        audit-required: true
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  $ref: "#/components/schemas/Money"
+                  description: Amount to capture (defaults to full authorized amount)
+      responses:
+        "200":
+          description: Payment captured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          description: Cannot capture payment in current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /payments/{payment_id}/refund:
+    post:
+      operationId: refundPayment
+      tags: [Payments]
+      summary: Refund a payment
+      description: Issues a full or partial refund for a settled payment.
+      x-compliance:
+        regulations: [PCI-DSS-4.0, BSA-AML]
+        data-classification: restricted
+        audit-required: true
+        retention-days: 2555
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                amount:
+                  $ref: "#/components/schemas/Money"
+                reason:
+                  type: string
+                  enum: [duplicate, fraudulent, customer_request, other]
+                  description: Reason for the refund
+      responses:
+        "200":
+          description: Refund issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
+  /accounts:
+    get:
+      operationId: listAccounts
+      tags: [Accounts]
+      summary: List accounts
+      description: Returns all accounts associated with the authenticated API key.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, suspended, closed]
+      responses:
+        "200":
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+
+  /accounts/{account_id}:
+    get:
+      operationId: getAccount
+      tags: [Accounts]
+      summary: Get an account
+      description: Retrieves account details and current balance.
+      x-compliance:
+        regulations: [BSA-AML, SOX]
+        data-classification: confidential
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: acc_abc123
+      responses:
+        "200":
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: Account not found
+
+  /transfers:
+    post:
+      operationId: createTransfer
+      tags: [Transfers]
+      summary: Create a transfer
+      description: |
+        Transfers funds between two VaultPay accounts. The transfer is atomic and settled immediately
+        for accounts in the same currency.
+      x-compliance:
+        regulations: [BSA-AML, OFAC, PSD2-SCA]
+        data-classification: restricted
+        audit-required: true
+        retention-days: 2555
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_account_id, destination_account_id, amount]
+              properties:
+                source_account_id:
+                  type: string
+                  description: Account to debit
+                destination_account_id:
+                  type: string
+                  description: Account to credit
+                amount:
+                  $ref: "#/components/schemas/Money"
+                description:
+                  type: string
+                idempotency_key:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: Transfer created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [pending, completed, failed]
+                  amount:
+                    $ref: "#/components/schemas/Money"
+                  created_at:
+                    type: string
+                    format: date-time
+        "400":
+          description: Insufficient funds or invalid accounts
