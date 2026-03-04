@@ -1,0 +1,1402 @@
+openapi: 3.1.0
+info:
+  title: VaultPay Payment API
+  version: 2.1.0
+  description: |
+    Enterprise-grade payment processing API for initiating, managing, and reconciling
+    payments across multiple rails — ACH, wire transfers, real-time payments (RTP/FedNow),
+    and card networks.
+
+    ## Getting Started
+    1. Sign up for a VaultPay developer account
+    2. Generate your API key pair from the Dashboard
+    3. Use the sandbox environment for testing: `https://sandbox.vaultpay.io/v2`
+    4. When ready, switch to production: `https://api.vaultpay.io/v2`
+
+    ## Rate Limits
+    - Sandbox: 100 requests/minute
+    - Production: 1,000 requests/minute
+    - Burst: 50 requests/second
+
+    ## Idempotency
+    All `POST` requests accept an `Idempotency-Key` header. Repeated requests with the same
+    key within 24 hours return the original response without creating duplicate resources.
+  contact:
+    name: VaultPay Developer Support
+    email: developers@vaultpay.io
+    url: https://developers.vaultpay.io
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  x-compliance:
+    regulations:
+      - PCI-DSS-4.0
+      - PSD2-SCA
+      - BSA-AML
+
+servers:
+  - url: https://api.vaultpay.io/v2
+    description: Production
+  - url: https://sandbox.vaultpay.io/v2
+    description: Sandbox (test mode)
+
+tags:
+  - name: Authentication
+    description: OAuth 2.0 token management
+  - name: Charges
+    description: Create and manage payment charges
+  - name: Refunds
+    description: Full and partial refunds
+  - name: Customers
+    description: Customer profile management
+  - name: Webhooks
+    description: Event notification configuration
+  - name: Payment Methods
+    description: Stored payment instruments
+  - name: Disputes
+    description: Chargeback and dispute management
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+paths:
+  /auth/token:
+    post:
+      operationId: createToken
+      tags: [Authentication]
+      summary: Generate access token
+      description: |
+        Exchange client credentials for a time-limited access token.
+        Tokens expire after 3600 seconds (1 hour).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type, client_id, client_secret]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials, authorization_code, refresh_token]
+                  description: OAuth 2.0 grant type
+                client_id:
+                  type: string
+                  description: Your application's client ID
+                  example: vp_live_ck_9f8a7b6c5d4e3f2a
+                client_secret:
+                  type: string
+                  description: Your application's client secret
+                  format: password
+                  example: vp_live_sk_1a2b3c4d5e6f7g8h
+                code:
+                  type: string
+                  description: Authorization code (required for `authorization_code` grant)
+                refresh_token:
+                  type: string
+                  description: Refresh token (required for `refresh_token` grant)
+      responses:
+        "200":
+          description: Token generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+              example:
+                access_token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+                token_type: Bearer
+                expires_in: 3600
+                refresh_token: rt_8h7g6f5e4d3c2b1a
+                scope: "payments:write payments:read customers:read"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /charges:
+    post:
+      operationId: createCharge
+      tags: [Charges]
+      summary: Create a charge
+      description: |
+        Initiate a payment charge against a customer's payment method.
+
+        Charges are processed asynchronously for ACH and wire rails, and synchronously
+        for card and RTP/FedNow rails. Use webhooks or polling to track status changes.
+      x-compliance:
+        regulations:
+          - PCI-DSS-4.0
+          - PSD2-SCA
+        data-classification: restricted
+        audit-required: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChargeRequest"
+            examples:
+              card_charge:
+                summary: Card payment
+                value:
+                  amount: 5000
+                  currency: USD
+                  payment_method_id: pm_card_4242424242424242
+                  customer_id: cus_9f8a7b6c
+                  description: "Annual subscription renewal"
+                  metadata:
+                    order_id: "ORD-2026-001"
+                    invoice_ref: "INV-44821"
+              ach_charge:
+                summary: ACH payment
+                value:
+                  amount: 150000
+                  currency: USD
+                  payment_method_id: pm_ach_021000021_9876
+                  customer_id: cus_3d4e5f6g
+                  description: "Vendor payment - March 2026"
+                  rail: ach
+                  ach_details:
+                    sec_code: CCD
+                    entry_description: "VENDOR PMT"
+              rtp_charge:
+                summary: Real-time payment (RTP)
+                value:
+                  amount: 25000
+                  currency: USD
+                  payment_method_id: pm_rtp_021000021
+                  customer_id: cus_7h8i9j0k
+                  rail: rtp
+                  description: "Instant settlement - invoice 9921"
+      responses:
+        "201":
+          description: Charge created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+              description: Unique request identifier for debugging
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+              description: Remaining requests in current window
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          description: Payment failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: card_declined
+                  message: "The card was declined. The card issuer returned a generic decline."
+                  decline_code: generic_decline
+                  param: payment_method_id
+        "409":
+          description: Duplicate idempotency key with different parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    get:
+      operationId: listCharges
+      tags: [Charges]
+      summary: List all charges
+      description: Returns a paginated list of charges, sorted by creation date (newest first).
+      parameters:
+        - name: limit
+          in: query
+          description: Number of results per page (1-100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: starting_after
+          in: query
+          description: Cursor for forward pagination. Pass the `id` of the last item in the previous page.
+          schema:
+            type: string
+        - name: ending_before
+          in: query
+          description: Cursor for backward pagination.
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by charge status
+          schema:
+            type: string
+            enum: [pending, processing, succeeded, failed, canceled, disputed]
+        - name: customer_id
+          in: query
+          description: Filter by customer
+          schema:
+            type: string
+        - name: created[gte]
+          in: query
+          description: "Filter: created at or after this timestamp (ISO 8601)"
+          schema:
+            type: string
+            format: date-time
+        - name: created[lte]
+          in: query
+          description: "Filter: created at or before this timestamp (ISO 8601)"
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated list of charges
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChargeList"
+
+  /charges/{charge_id}:
+    get:
+      operationId: getCharge
+      tags: [Charges]
+      summary: Retrieve a charge
+      description: Retrieves the details of an existing charge by its unique identifier.
+      parameters:
+        - $ref: "#/components/parameters/ChargeId"
+      responses:
+        "200":
+          description: Charge details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /charges/{charge_id}/capture:
+    post:
+      operationId: captureCharge
+      tags: [Charges]
+      summary: Capture an authorized charge
+      description: |
+        Captures a previously authorized charge. Only applicable when `capture_method`
+        was set to `manual` during charge creation. Must be captured within 7 days
+        of authorization, or the authorization expires.
+      parameters:
+        - $ref: "#/components/parameters/ChargeId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: integer
+                  description: |
+                    Amount to capture in the smallest currency unit (e.g., cents).
+                    Must be less than or equal to the authorized amount.
+                    If omitted, the full authorized amount is captured.
+                  minimum: 1
+      responses:
+        "200":
+          description: Charge captured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+        "400":
+          description: Charge is not in a capturable state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /charges/{charge_id}/cancel:
+    post:
+      operationId: cancelCharge
+      tags: [Charges]
+      summary: Cancel a charge
+      description: |
+        Cancels a charge that has not yet been captured or settled.
+        For ACH charges, cancellation is only possible before the batch
+        submission window closes (typically 4:00 PM ET).
+      parameters:
+        - $ref: "#/components/parameters/ChargeId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  enum: [duplicate, fraudulent, requested_by_customer, other]
+                  description: Reason for cancellation
+      responses:
+        "200":
+          description: Charge canceled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+        "400":
+          description: Charge cannot be canceled (already captured/settled)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /refunds:
+    post:
+      operationId: createRefund
+      tags: [Refunds]
+      summary: Create a refund
+      description: |
+        Creates a full or partial refund for a previously succeeded charge.
+
+        - **Card refunds**: Processed within 5-10 business days
+        - **ACH refunds**: Processed within 3-5 business days
+        - **RTP refunds**: Not supported (use a new outbound payment instead)
+        - **Wire refunds**: Manual process, contact support
+      x-compliance:
+        regulations:
+          - PCI-DSS-4.0
+          - Reg-E
+        audit-required: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRefundRequest"
+      responses:
+        "201":
+          description: Refund created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refund"
+        "400":
+          description: Refund not possible for this charge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /customers:
+    post:
+      operationId: createCustomer
+      tags: [Customers]
+      summary: Create a customer
+      description: Creates a new customer profile. Customer profiles allow you to store payment methods and track charge history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerRequest"
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    get:
+      operationId: listCustomers
+      tags: [Customers]
+      summary: List customers
+      description: Returns a paginated list of customers.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: email
+          in: query
+          description: Filter by exact email match
+          schema:
+            type: string
+            format: email
+      responses:
+        "200":
+          description: List of customers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Customer"
+                  has_more:
+                    type: boolean
+
+  /customers/{customer_id}:
+    get:
+      operationId: getCustomer
+      tags: [Customers]
+      summary: Retrieve a customer
+      parameters:
+        - name: customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Customer details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      operationId: updateCustomer
+      tags: [Customers]
+      summary: Update a customer
+      description: Updates the specified customer by setting the values of the parameters passed. Any parameters not provided are left unchanged.
+      parameters:
+        - name: customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                phone:
+                  type: string
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: Customer updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+
+    delete:
+      operationId: deleteCustomer
+      tags: [Customers]
+      summary: Delete a customer
+      deprecated: true
+      description: |
+        **Deprecated.** Use `POST /customers/{customer_id}/archive` instead.
+
+        Permanently deletes a customer and all associated payment methods.
+        This action cannot be undone. Any active subscriptions are immediately canceled.
+      parameters:
+        - name: customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Customer deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  deleted:
+                    type: boolean
+                    const: true
+
+  /payment-methods:
+    post:
+      operationId: createPaymentMethod
+      tags: [Payment Methods]
+      summary: Create a payment method
+      description: |
+        Attaches a new payment method to a customer. Supports card, ACH bank account,
+        and wire transfer instruments.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentMethodRequest"
+      responses:
+        "201":
+          description: Payment method created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentMethod"
+
+  /disputes/{dispute_id}:
+    get:
+      operationId: getDispute
+      tags: [Disputes]
+      summary: Retrieve a dispute
+      description: Retrieves details of a chargeback or inquiry dispute.
+      parameters:
+        - name: dispute_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dispute details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+
+  /disputes/{dispute_id}/evidence:
+    post:
+      operationId: submitDisputeEvidence
+      tags: [Disputes]
+      summary: Submit dispute evidence
+      description: |
+        Submit evidence to contest a dispute. Evidence must be submitted before
+        the `evidence_due_by` deadline. Once submitted, evidence cannot be modified.
+      parameters:
+        - name: dispute_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisputeEvidence"
+      responses:
+        "200":
+          description: Evidence submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+
+  /webhooks/endpoints:
+    post:
+      operationId: createWebhookEndpoint
+      tags: [Webhooks]
+      summary: Create a webhook endpoint
+      description: |
+        Register a URL to receive event notifications. VaultPay signs all webhook
+        payloads with HMAC-SHA256. See the [Webhook Verification Guide](#) for details.
+
+        **Retry policy:** Failed deliveries are retried up to 5 times with exponential
+        backoff (1min, 5min, 30min, 2hr, 24hr).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: The HTTPS URL that will receive webhook events
+                  example: https://example.com/webhooks/vaultpay
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - charge.created
+                      - charge.succeeded
+                      - charge.failed
+                      - charge.disputed
+                      - charge.refunded
+                      - refund.created
+                      - refund.succeeded
+                      - refund.failed
+                      - customer.created
+                      - customer.updated
+                      - payment_method.attached
+                      - payment_method.detached
+                      - dispute.created
+                      - dispute.updated
+                      - dispute.closed
+                  description: List of event types to subscribe to. Use `["*"]` for all events.
+                description:
+                  type: string
+                  description: Optional description for this endpoint
+                  maxLength: 200
+                secret:
+                  type: string
+                  description: |
+                    Optional custom signing secret. If omitted, VaultPay generates one.
+                    Must be at least 32 characters.
+                  minLength: 32
+      responses:
+        "201":
+          description: Webhook endpoint created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: we_1a2b3c4d5e6f
+                  url:
+                    type: string
+                    format: uri
+                  events:
+                    type: array
+                    items:
+                      type: string
+                  secret:
+                    type: string
+                    description: The signing secret. **Only returned once at creation time.**
+                  status:
+                    type: string
+                    enum: [active, disabled]
+                  created_at:
+                    type: string
+                    format: date-time
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OAuth 2.0 access token obtained from `/auth/token`
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key from your VaultPay dashboard
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Unique key to ensure idempotent requests. Use a UUID v4.
+        Requests with the same key within 24 hours return the cached response.
+      schema:
+        type: string
+        format: uuid
+      example: 550e8400-e29b-41d4-a716-446655440000
+
+    ChargeId:
+      name: charge_id
+      in: path
+      required: true
+      description: Unique identifier for the charge
+      schema:
+        type: string
+      example: ch_1a2b3c4d5e6f
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: invalid_request
+              message: "The 'amount' field must be a positive integer."
+              param: amount
+
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: authentication_failed
+              message: "Invalid API key or expired access token."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: resource_not_found
+              message: "No charge found with id 'ch_nonexistent'."
+              param: charge_id
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: validation_error
+              message: "One or more fields failed validation."
+              details:
+                - field: amount
+                  message: "Must be greater than 0"
+                - field: currency
+                  message: "Invalid currency code. Use ISO 4217 (e.g., USD, EUR, GBP)."
+
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+          description: Request limit per minute
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+          description: Remaining requests in current window
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: rate_limit_exceeded
+              message: "Too many requests. Retry after 12 seconds."
+
+  schemas:
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: JWT access token
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds
+        refresh_token:
+          type: string
+          description: Token for obtaining a new access token
+        scope:
+          type: string
+          description: Space-delimited list of granted scopes
+
+    CreateChargeRequest:
+      type: object
+      required: [amount, currency, payment_method_id]
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 99999999
+          description: Amount in the smallest currency unit (e.g., cents for USD). $50.00 = 5000.
+        currency:
+          type: string
+          enum: [USD, EUR, GBP, CAD, AUD, JPY, CHF, SGD]
+          description: Three-letter ISO 4217 currency code
+        payment_method_id:
+          type: string
+          description: ID of the payment method to charge
+        customer_id:
+          type: string
+          description: ID of the customer (required if payment method is not tokenized)
+        description:
+          type: string
+          maxLength: 500
+          description: Arbitrary description for your records
+        rail:
+          type: string
+          enum: [card, ach, wire, rtp, fednow]
+          description: Payment rail. Auto-detected from payment method if omitted.
+        capture_method:
+          type: string
+          enum: [automatic, manual]
+          default: automatic
+          description: |
+            `automatic` — Charge is captured immediately.
+            `manual` — Authorize only; call `/charges/{id}/capture` to capture.
+        ach_details:
+          $ref: "#/components/schemas/ACHDetails"
+        three_d_secure:
+          $ref: "#/components/schemas/ThreeDSecureRequest"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          maxProperties: 20
+          description: Up to 20 key-value pairs for your use. Keys max 40 chars, values max 500 chars.
+
+    ACHDetails:
+      type: object
+      description: Required fields for ACH payments
+      properties:
+        sec_code:
+          type: string
+          enum: [CCD, PPD, WEB, TEL]
+          description: |
+            NACHA Standard Entry Class code:
+            - `CCD` — Corporate Credit or Debit
+            - `PPD` — Prearranged Payment and Deposit
+            - `WEB` — Internet-initiated
+            - `TEL` — Telephone-initiated
+        entry_description:
+          type: string
+          maxLength: 10
+          description: 10-character description that appears on the recipient's bank statement
+        effective_date:
+          type: string
+          format: date
+          description: Requested settlement date (YYYY-MM-DD). Must be a banking day.
+        batch_mode:
+          type: boolean
+          default: false
+          description: If true, the charge is queued for batch processing at 4:00 PM ET.
+
+    ThreeDSecureRequest:
+      type: object
+      description: 3D Secure authentication parameters (required for EU/PSD2 transactions over €30)
+      properties:
+        required:
+          type: boolean
+          default: false
+          description: Force 3D Secure authentication regardless of exemptions
+        return_url:
+          type: string
+          format: uri
+          description: URL to redirect the cardholder after authentication
+        exemption_type:
+          type: string
+          enum: [low_value, trusted_beneficiary, transaction_risk_analysis, recurring]
+          description: SCA exemption type to request (not guaranteed by issuer)
+
+    Charge:
+      type: object
+      required: [id, amount, currency, status, created_at]
+      properties:
+        id:
+          type: string
+          description: Unique charge identifier
+          example: ch_1a2b3c4d5e6f
+        amount:
+          type: integer
+          description: Charge amount in smallest currency unit
+        amount_captured:
+          type: integer
+          description: Amount actually captured (may differ for partial captures)
+        amount_refunded:
+          type: integer
+          description: Total amount refunded
+          default: 0
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, authorized, succeeded, failed, canceled, disputed]
+          description: |
+            Charge lifecycle:
+            - `pending` — Created, not yet submitted to payment network
+            - `processing` — Submitted, awaiting network response
+            - `authorized` — Authorized (manual capture only)
+            - `succeeded` — Payment completed
+            - `failed` — Payment declined or errored
+            - `canceled` — Canceled before settlement
+            - `disputed` — Chargeback or inquiry received
+        rail:
+          type: string
+          enum: [card, ach, wire, rtp, fednow]
+        payment_method_id:
+          type: string
+        customer_id:
+          type: string
+        description:
+          type: string
+        failure_reason:
+          oneOf:
+            - $ref: "#/components/schemas/CardFailure"
+            - $ref: "#/components/schemas/ACHFailure"
+            - $ref: "#/components/schemas/NetworkFailure"
+          description: Present only when `status` is `failed`. Structure depends on payment rail.
+        three_d_secure:
+          $ref: "#/components/schemas/ThreeDSecureResult"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        refunds:
+          type: array
+          items:
+            $ref: "#/components/schemas/Refund"
+          description: List of refunds issued against this charge
+        dispute:
+          $ref: "#/components/schemas/Dispute"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CardFailure:
+      type: object
+      properties:
+        type:
+          type: string
+          const: card
+        decline_code:
+          type: string
+          enum: [generic_decline, insufficient_funds, lost_card, stolen_card, expired_card, incorrect_cvc, processing_error, do_not_honor]
+        message:
+          type: string
+        network_code:
+          type: string
+          description: Raw response code from the card network
+
+    ACHFailure:
+      type: object
+      properties:
+        type:
+          type: string
+          const: ach
+        return_code:
+          type: string
+          description: "NACHA return reason code (e.g., R01, R02, R03)"
+          enum: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R16, R20, R29]
+        return_description:
+          type: string
+          description: Human-readable return reason
+          example: "R01 — Insufficient Funds"
+
+    NetworkFailure:
+      type: object
+      properties:
+        type:
+          type: string
+          const: network
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+
+    ThreeDSecureResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [authenticated, attempted, failed, rejected, challenge_required]
+        version:
+          type: string
+          enum: ["1.0", "2.1", "2.2"]
+        eci:
+          type: string
+          description: Electronic Commerce Indicator
+        cavv:
+          type: string
+          description: Cardholder Authentication Verification Value
+        ds_transaction_id:
+          type: string
+          description: Directory Server transaction ID
+
+    ChargeList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Charge"
+        has_more:
+          type: boolean
+          description: Whether more results exist beyond this page
+        total_count:
+          type: integer
+          description: Total number of matching charges
+        url:
+          type: string
+          description: API URL for this list
+
+    CreateRefundRequest:
+      type: object
+      required: [charge_id]
+      properties:
+        charge_id:
+          type: string
+          description: ID of the charge to refund
+        amount:
+          type: integer
+          minimum: 1
+          description: |
+            Amount to refund in smallest currency unit.
+            If omitted, a full refund is issued.
+        reason:
+          type: string
+          enum: [duplicate, fraudulent, requested_by_customer, other]
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    Refund:
+      type: object
+      properties:
+        id:
+          type: string
+          example: re_9z8y7x6w5v
+        charge_id:
+          type: string
+        amount:
+          type: integer
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, succeeded, failed]
+        reason:
+          type: string
+        failure_reason:
+          type: string
+          description: Present only when status is `failed`
+        created_at:
+          type: string
+          format: date-time
+
+    CreateCustomerRequest:
+      type: object
+      required: [email]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          description: Phone number in E.164 format
+          example: "+14155551234"
+        address:
+          $ref: "#/components/schemas/Address"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          example: cus_9f8a7b6c
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: "#/components/schemas/Address"
+        payment_methods:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentMethod"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Address:
+      type: object
+      properties:
+        line1:
+          type: string
+        line2:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+          description: ISO 3166-2 subdivision code (e.g., US-CA)
+        postal_code:
+          type: string
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code (e.g., US, GB, IN)
+
+    CreatePaymentMethodRequest:
+      type: object
+      required: [type, customer_id]
+      properties:
+        type:
+          type: string
+          enum: [card, ach_bank_account, wire]
+        customer_id:
+          type: string
+        card:
+          $ref: "#/components/schemas/CardDetails"
+        ach_bank_account:
+          $ref: "#/components/schemas/ACHBankAccount"
+        billing_address:
+          $ref: "#/components/schemas/Address"
+
+    PaymentMethod:
+      type: object
+      properties:
+        id:
+          type: string
+          example: pm_card_4242424242424242
+        type:
+          type: string
+          enum: [card, ach_bank_account, wire]
+        card:
+          $ref: "#/components/schemas/CardSummary"
+        ach_bank_account:
+          $ref: "#/components/schemas/ACHBankAccountSummary"
+        created_at:
+          type: string
+          format: date-time
+
+    CardDetails:
+      type: object
+      description: |
+        **Never send raw card numbers to VaultPay.** Use VaultPay.js to tokenize
+        card details client-side and pass the resulting token here.
+      properties:
+        token:
+          type: string
+          description: Tokenized card (from VaultPay.js)
+        exp_month:
+          type: integer
+          minimum: 1
+          maximum: 12
+        exp_year:
+          type: integer
+          minimum: 2026
+
+    CardSummary:
+      type: object
+      description: Masked card details (safe to store and display)
+      properties:
+        brand:
+          type: string
+          enum: [visa, mastercard, amex, discover]
+        last4:
+          type: string
+          example: "4242"
+        exp_month:
+          type: integer
+        exp_year:
+          type: integer
+        fingerprint:
+          type: string
+          description: Unique identifier for this card number
+
+    ACHBankAccount:
+      type: object
+      properties:
+        routing_number:
+          type: string
+          description: 9-digit ABA routing number
+          pattern: "^\\d{9}$"
+        account_number:
+          type: string
+          description: Bank account number
+        account_type:
+          type: string
+          enum: [checking, savings]
+        account_holder_name:
+          type: string
+        account_holder_type:
+          type: string
+          enum: [individual, company]
+
+    ACHBankAccountSummary:
+      type: object
+      properties:
+        bank_name:
+          type: string
+        last4:
+          type: string
+        account_type:
+          type: string
+          enum: [checking, savings]
+        routing_number:
+          type: string
+
+    Dispute:
+      type: object
+      properties:
+        id:
+          type: string
+          example: dp_5e4d3c2b1a
+        charge_id:
+          type: string
+        amount:
+          type: integer
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [needs_response, under_review, won, lost, accepted]
+        reason:
+          type: string
+          enum: [fraudulent, unrecognized, duplicate, product_not_received, product_unacceptable, subscription_canceled, other]
+        evidence_due_by:
+          type: string
+          format: date-time
+          description: Deadline for submitting evidence
+        network_reason_code:
+          type: string
+          description: Card network dispute reason code
+        created_at:
+          type: string
+          format: date-time
+
+    DisputeEvidence:
+      type: object
+      properties:
+        customer_communication:
+          type: string
+          description: Relevant emails or chat logs with the customer
+        receipt:
+          type: string
+          description: URL to the receipt or proof of delivery
+        service_documentation:
+          type: string
+          description: Documentation proving the service was provided
+        shipping_tracking:
+          type: string
+          description: Shipping carrier and tracking number
+        uncategorized_text:
+          type: string
+          maxLength: 5000
+          description: Any additional context
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+            message:
+              type: string
+              description: Human-readable error description
+            param:
+              type: string
+              description: The parameter related to the error
+            decline_code:
+              type: string
+              description: Card decline code (card errors only)
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+
+webhooks:
+  charge.succeeded:
+    post:
+      operationId: onChargeSucceeded
+      summary: Charge succeeded
+      description: Fired when a charge transitions to `succeeded` status.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  example: evt_1a2b3c4d
+                type:
+                  type: string
+                  const: charge.succeeded
+                created_at:
+                  type: string
+                  format: date-time
+                data:
+                  $ref: "#/components/schemas/Charge"
+
+  dispute.created:
+    post:
+      operationId: onDisputeCreated
+      summary: Dispute created
+      description: |
+        Fired when a new dispute (chargeback or inquiry) is opened against a charge.
+        You have until `evidence_due_by` to respond.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                type:
+                  type: string
+                  const: dispute.created
+                created_at:
+                  type: string
+                  format: date-time
+                data:
+                  $ref: "#/components/schemas/Dispute"

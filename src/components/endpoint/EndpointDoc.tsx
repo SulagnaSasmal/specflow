@@ -1,10 +1,12 @@
 "use client";
 
 import type { ParsedOperation, ParsedSpec } from "@/types/openapi";
+import { useSpec } from "@/lib/spec-context";
 import { MethodBadge } from "@/components/ui/MethodBadge";
 import { ParameterTable } from "./ParameterTable";
 import { ResponseSection } from "./ResponseSection";
 import { RequestBodySection } from "./RequestBodySection";
+import { TryItConsole } from "@/components/try-it/TryItConsole";
 
 interface EndpointDocProps {
   operation: ParsedOperation;
@@ -21,8 +23,10 @@ const COMPLIANCE_LABEL: Record<string, { label: string; color: string }> = {
 };
 
 export function EndpointDoc({ operation, spec: _spec }: EndpointDocProps) {
+  const { authToken, selectedServer, corsProxyUrl } = useSpec();
   const params = operation.parameters || [];
   const compliance = operation["x-compliance"];
+  const baseUrl = selectedServer?.url || _spec.servers?.[0]?.url || "https://api.example.com";
 
   return (
     <div className="animate-fade-in">
@@ -107,6 +111,14 @@ export function EndpointDoc({ operation, spec: _spec }: EndpointDocProps) {
 
       {/* Responses */}
       <ResponseSection responses={operation.responses} />
+
+      {/* Try-It Console */}
+      <TryItConsole
+        operation={operation}
+        baseUrl={baseUrl}
+        authToken={authToken}
+        corsProxyUrl={corsProxyUrl}
+      />
     </div>
   );
 }
