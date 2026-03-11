@@ -1,11 +1,13 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import type { ParsedSpec, ParsedOperation, OpenAPIServer } from "@/types/openapi";
 import { parseSpec } from "@/parser";
 import { buildSearchIndex, createFuseInstance } from "@/search";
 import Fuse from "fuse.js";
 import type { SearchIndexItem } from "@/types/openapi";
+import type { SpecFlowConfig } from "@/types/config";
+import { mergeConfig, applyBranding } from "@/lib/config";
 
 interface SpecContextValue {
   spec: ParsedSpec | null;
@@ -17,11 +19,13 @@ interface SpecContextValue {
   authToken: string | undefined;
   selectedServer: OpenAPIServer | null;
   corsProxyUrl: string | undefined;
+  config: Required<SpecFlowConfig> | null;
   loadSpec: (input: string | object) => Promise<void>;
   setActiveOperation: (op: ParsedOperation | null) => void;
   setAuthToken: (token: string | undefined) => void;
   setSelectedServer: (server: OpenAPIServer | null) => void;
   setCorsProxyUrl: (url: string | undefined) => void;
+  setConfig: (c: Required<SpecFlowConfig> | null) => void;
   clearSpec: () => void;
 }
 
@@ -37,6 +41,17 @@ export function SpecProvider({ children }: { children: React.ReactNode }) {
   const [authToken, setAuthToken] = useState<string | undefined>(undefined);
   const [selectedServer, setSelectedServer] = useState<OpenAPIServer | null>(null);
   const [corsProxyUrl, setCorsProxyUrl] = useState<string | undefined>(undefined);
+  const [config, setConfigState] = useState<Required<SpecFlowConfig> | null>(null);
+
+  const setConfig = useCallback((c: Required<SpecFlowConfig> | null) => {
+    setConfigState(c);
+    if (c) applyBranding(c);
+  }, []);
+
+  // Re-apply branding on remount (e.g., navigation)
+  useEffect(() => {
+    if (config) applyBranding(config);
+  }, []);
 
   const loadSpec = useCallback(async (input: string | object) => {
     setIsLoading(true);
@@ -96,6 +111,8 @@ export function SpecProvider({ children }: { children: React.ReactNode }) {
         setAuthToken,
         setSelectedServer,
         setCorsProxyUrl,
+        config,
+        setConfig,
         clearSpec,
       }}
     >

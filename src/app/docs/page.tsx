@@ -10,6 +10,8 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { SearchModal } from "@/components/search/SearchModal";
 import { AuthPanel } from "@/components/try-it/AuthPanel";
 import { ServerSelector } from "@/components/try-it/ServerSelector";
+import { AIEnrichPanel } from "@/components/ui/AIEnrichPanel";
+import { ConfigPanel } from "@/components/ui/ConfigPanel";
 import { useState } from "react";
 
 export default function DocsPage() {
@@ -126,6 +128,8 @@ export default function DocsPage() {
             onServerChange={setSelectedServer}
           />
         )}
+        <AIEnrichPanel />
+        <ConfigPanel />
         <button
           onClick={() => { clearSpec(); router.push("/"); }}
           className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors"

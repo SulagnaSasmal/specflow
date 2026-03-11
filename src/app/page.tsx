@@ -4,6 +4,7 @@ import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useSpec } from "@/lib/spec-context";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { ConfigPanel } from "@/components/ui/ConfigPanel";
 
 export default function HomePage() {
   const { loadSpec, isLoading, error } = useSpec();
@@ -81,6 +82,7 @@ export default function HomePage() {
           >
             GitHub
           </a>
+          <ConfigPanel />
           <ThemeToggle />
         </div>
       </header>
@@ -99,7 +101,7 @@ export default function HomePage() {
               <span className="text-indigo-600 dark:text-indigo-400">Get a developer portal.</span>
             </h1>
             <p className="text-slate-500 dark:text-slate-400 text-lg max-w-md mx-auto">
-              Stripe-quality three-panel documentation with live code samples, schema visualization, and compliance annotations.
+              Stripe-quality three-panel docs with AI enrichment, spec quality scoring, live code samples, and compliance annotations.
             </p>
           </div>
 
@@ -242,9 +244,9 @@ export default function HomePage() {
         <div className="max-w-4xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-6 text-center">
           {[
             { icon: "⚡", title: "Instant", desc: "Parse any OpenAPI 3.x spec in seconds" },
-            { icon: "🎨", title: "Beautiful", desc: "Three-panel Stripe-inspired layout" },
+            { icon: "✨", title: "AI Enrichment", desc: "Auto-complete summaries & descriptions with GPT-4o" },
+            { icon: "📊", title: "Quality Score", desc: "100-point rubric across 5 coverage categories" },
             { icon: "🔒", title: "Compliance", desc: "PCI-DSS, PSD2, GDPR annotations" },
-            { icon: "📦", title: "Static", desc: "Deploy to GitHub Pages for free" },
           ].map((f) => (
             <div key={f.title}>
               <div className="text-2xl mb-2">{f.icon}</div>

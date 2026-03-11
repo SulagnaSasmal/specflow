@@ -2,6 +2,8 @@
 
 import { useSpec } from "@/lib/spec-context";
 import { EndpointDoc } from "@/components/endpoint/EndpointDoc";
+import { QualityScorePanel } from "@/components/ui/QualityScorePanel";
+import { safeComputeQuality } from "@/lib/quality-score";
 
 export function ContentPanel() {
   const { spec, activeOperation } = useSpec();
@@ -28,6 +30,7 @@ export function ContentPanel() {
 }
 
 function WelcomeSection({ spec }: { spec: import("@/types/openapi").ParsedSpec }) {
+  const report = safeComputeQuality(spec);
   return (
     <div className="animate-fade-in">
       <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-3">
@@ -48,6 +51,13 @@ function WelcomeSection({ spec }: { spec: import("@/types/openapi").ParsedSpec }
         <p className="text-slate-600 dark:text-slate-400 leading-relaxed mb-8">
           {spec.info.description}
         </p>
+      )}
+
+      {/* Quality Score */}
+      {report && (
+        <div className="mb-8">
+          <QualityScorePanel report={report} />
+        </div>
       )}
 
       {/* Stats */}

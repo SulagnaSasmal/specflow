@@ -1,12 +1,26 @@
 {
   "name": "specflow",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
+  "description": "OpenAPI → Beautiful Developer Portal with AI enrichment, quality scoring, and compliance annotations",
+  "private": false,
+  "bin": {
+    "specflow": "./cli/index.js"
+  },
+  "files": [
+    "out/",
+    "cli/",
+    "public/",
+    "src/",
+    "*.config.*",
+    "next.config.*",
+    "tsconfig.json"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "cli:score": "node cli/index.js score"
   },
   "dependencies": {
     "@readme/openapi-parser": "^6.0.0",
@@ -14,6 +28,7 @@
     "js-yaml": "^4.1.1",
     "next": "16.1.6",
     "next-themes": "^0.4.6",
+    "openai": "^4.104.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "shiki": "^4.0.1",
